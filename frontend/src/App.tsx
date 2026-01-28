@@ -5,11 +5,12 @@ import { ColumnMapper } from './components/ColumnMapper';
 import { RulesConfig } from './components/RulesConfig';
 import { Dashboard } from './components/Dashboard';
 import { PreviewTable } from './components/PreviewTable';
+import { ProgressBar } from './components/ProgressBar';
 import type { CleansingConfig, ColumnMapping, PrescriptionRules, ImmunityRules, ExemptionRules, IncompleteRules, ProcessResponse } from './types';
 import { Loader2, Download, Sparkles } from 'lucide-react';
 import './index.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || (window.location.hostname === 'localhost' ? 'http://localhost:8000' : '/api');
 
 const DEFAULT_MAPPING: ColumnMapping = {
   debt_id: '',
@@ -53,6 +54,8 @@ function App() {
   const [isExporting, setIsExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ProcessResponse | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [progressStatus, setProgressStatus] = useState('');
 
   const handleFileSelect = useCallback(async (selectedFile: File) => {
     setFile(selectedFile);
@@ -92,8 +95,21 @@ function App() {
 
     setIsLoading(true);
     setError(null);
+    setProgress(0);
+    setProgressStatus('Enviando arquivo...');
+
+    // Simulate progress for better UX
+    const progressInterval = setInterval(() => {
+      setProgress(prev => {
+        if (prev < 30) return prev + 5;
+        if (prev < 60) return prev + 2;
+        if (prev < 85) return prev + 1;
+        return prev;
+      });
+    }, 300);
 
     try {
+      setProgressStatus('Processando dados...');
       const config: CleansingConfig = {
         mapping,
         prescription,
@@ -107,12 +123,17 @@ function App() {
       formData.append('config', JSON.stringify(config));
 
       const response = await axios.post<ProcessResponse>(`${API_URL}/process`, formData);
+      setProgress(100);
+      setProgressStatus('Concluído!');
+      await new Promise(r => setTimeout(r, 500));
       setResult(response.data);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Erro ao processar arquivo.');
       console.error(err);
     } finally {
+      clearInterval(progressInterval);
       setIsLoading(false);
+      setProgress(0);
     }
   }, [file, mapping, prescription, immunity, exemption, incomplete]);
 
@@ -224,7 +245,7 @@ function App() {
 
         {/* Process Button */}
         {columns.length > 0 && !result && (
-          <div className="flex justify-center">
+          <div className="flex flex-col items-center gap-6">
             <button
               onClick={handleProcess}
               disabled={!isMappingValid || isLoading}
@@ -242,6 +263,9 @@ function App() {
                 </>
               )}
             </button>
+            {isLoading && (
+              <ProgressBar progress={progress} status={progressStatus} />
+            )}
           </div>
         )}
 
