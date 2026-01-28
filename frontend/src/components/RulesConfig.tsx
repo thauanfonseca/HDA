@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
-import { PrescriptionRules, ImmunityRules, ExemptionRules, IncompleteRules } from '../types';
+import type { PrescriptionRules, ImmunityRules, ExemptionRules, IncompleteRules } from '../types';
 import clsx from 'clsx';
 
 interface RulesConfigProps {

@@ -1,4 +1,4 @@
-import { CleansingResult } from '../types';
+import type { CleansingResult } from '../types';
 import { FileCheck, AlertTriangle, Shield, Ban, XCircle, CheckCircle2 } from 'lucide-react';
 
 interface DashboardProps {
