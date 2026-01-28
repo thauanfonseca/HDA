@@ -162,14 +162,14 @@ function App() {
 
     try {
       const filename = `higienizado_${file.name.replace(/\.[^/.]+$/, '')}.xlsx`;
-      exportToExcel(processedDataRef.current, filename);
+      exportToExcel(processedDataRef.current, filename, mapping);
     } catch (err: unknown) {
       setError('Erro ao exportar arquivo.');
       console.error(err);
     } finally {
       setIsExporting(false);
     }
-  }, [file]);
+  }, [file, mapping]);
 
   const isMappingValid = mapping.debt_id && mapping.taxpayer_name && mapping.due_date && mapping.amount;
 
