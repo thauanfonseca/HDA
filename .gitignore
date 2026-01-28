@@ -24,3 +24,4 @@ backend/.venv/
 *.xlsx
 *.xls
 *.csv
+.vercel
