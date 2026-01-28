@@ -1,0 +1,26 @@
+# Node
+node_modules/
+dist/
+build/
+.env
+.env.local
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+.env
+backend/venv/
+backend/.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Data (SECURITY)
+*.xlsx
+*.xls
+*.csv
