@@ -5,7 +5,7 @@ import { ColumnMapper } from './components/ColumnMapper';
 import { RulesConfig } from './components/RulesConfig';
 import { Dashboard } from './components/Dashboard';
 import { PreviewTable } from './components/PreviewTable';
-import type { \n  CleansingConfig, \n  ColumnMapping, \n  PrescriptionRules, \n  ImmunityRules, \n  ExemptionRules, \n  IncompleteRules, \n  ProcessResponse \n } from './types';
+import type { CleansingConfig, ColumnMapping, PrescriptionRules, ImmunityRules, ExemptionRules, IncompleteRules, ProcessResponse } from './types';
 import { Loader2, Download, Sparkles } from 'lucide-react';
 import './index.css';
 
