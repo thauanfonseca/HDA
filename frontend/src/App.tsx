@@ -1,16 +1,14 @@
-import { useState, useCallback } from 'react';
-import axios from 'axios';
+import { useState, useCallback, useRef } from 'react';
 import { FileUpload } from './components/FileUpload';
 import { ColumnMapper } from './components/ColumnMapper';
 import { RulesConfig } from './components/RulesConfig';
 import { Dashboard } from './components/Dashboard';
 import { PreviewTable } from './components/PreviewTable';
 import { ProgressBar } from './components/ProgressBar';
-import type { CleansingConfig, ColumnMapping, PrescriptionRules, ImmunityRules, ExemptionRules, IncompleteRules, ProcessResponse } from './types';
+import { readExcelFile, processData, exportToExcel } from './services/excelProcessor';
+import type { CleansingConfig, ColumnMapping, PrescriptionRules, ImmunityRules, ExemptionRules, IncompleteRules, CleansingResult } from './types';
 import { Loader2, Download, Sparkles } from 'lucide-react';
 import './index.css';
-
-const API_URL = import.meta.env.VITE_API_URL || (window.location.hostname === 'localhost' ? 'http://localhost:8000' : '/api');
 
 const DEFAULT_MAPPING: ColumnMapping = {
   debt_id: '',
@@ -41,6 +39,11 @@ const DEFAULT_INCOMPLETE: IncompleteRules = {
   check_cpf_cnpj: true,
 };
 
+interface ProcessResult {
+  summary: CleansingResult;
+  preview: Record<string, unknown>[];
+}
+
 function App() {
   const [file, setFile] = useState<File | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
@@ -53,9 +56,13 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<ProcessResponse | null>(null);
+  const [result, setResult] = useState<ProcessResult | null>(null);
   const [progress, setProgress] = useState(0);
   const [progressStatus, setProgressStatus] = useState('');
+
+  // Store raw data for processing/export
+  const rawDataRef = useRef<Record<string, unknown>[]>([]);
+  const processedDataRef = useRef<Record<string, unknown>[]>([]);
 
   const handleFileSelect = useCallback(async (selectedFile: File) => {
     setFile(selectedFile);
@@ -63,16 +70,21 @@ function App() {
     setResult(null);
     setColumns([]);
     setMapping(DEFAULT_MAPPING);
+    setProgress(0);
+    setProgressStatus('Lendo arquivo...');
+    setIsLoading(true);
 
     try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-
-      const response = await axios.post(`${API_URL}/analyze-headers`, formData);
-      setColumns(response.data.columns);
+      const { columns: cols, data } = await readExcelFile(selectedFile);
+      setColumns(cols);
+      rawDataRef.current = data;
+      setProgressStatus('');
     } catch (err) {
-      setError('Erro ao ler cabeçalhos do arquivo. Verifique se o backend está rodando.');
+      setError('Erro ao ler arquivo. Verifique se é um arquivo Excel válido.');
       console.error(err);
+    } finally {
+      setIsLoading(false);
+      setProgress(0);
     }
   }, []);
 
@@ -82,10 +94,12 @@ function App() {
     setMapping(DEFAULT_MAPPING);
     setResult(null);
     setError(null);
+    rawDataRef.current = [];
+    processedDataRef.current = [];
   }, []);
 
   const handleProcess = useCallback(async () => {
-    if (!file) return;
+    if (!file || rawDataRef.current.length === 0) return;
 
     // Validate mapping
     if (!mapping.debt_id || !mapping.taxpayer_name || !mapping.due_date || !mapping.amount) {
@@ -96,20 +110,9 @@ function App() {
     setIsLoading(true);
     setError(null);
     setProgress(0);
-    setProgressStatus('Enviando arquivo...');
-
-    // Simulate progress for better UX
-    const progressInterval = setInterval(() => {
-      setProgress(prev => {
-        if (prev < 30) return prev + 5;
-        if (prev < 60) return prev + 2;
-        if (prev < 85) return prev + 1;
-        return prev;
-      });
-    }, 300);
+    setProgressStatus('Iniciando processamento...');
 
     try {
-      setProgressStatus('Processando dados...');
       const config: CleansingConfig = {
         mapping,
         prescription,
@@ -118,64 +121,52 @@ function App() {
         incomplete,
       };
 
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('config', JSON.stringify(config));
+      // Use setTimeout to allow UI to update
+      await new Promise(resolve => setTimeout(resolve, 50));
 
-      const response = await axios.post<ProcessResponse>(`${API_URL}/process`, formData);
-      setProgress(100);
-      setProgressStatus('Concluído!');
+      const processResult = processData(
+        rawDataRef.current,
+        config,
+        (prog, status) => {
+          setProgress(prog);
+          setProgressStatus(status);
+        }
+      );
+
+      processedDataRef.current = processResult.processedData;
+
+      setResult({
+        summary: processResult.summary,
+        preview: processResult.preview,
+      });
+
       await new Promise(r => setTimeout(r, 500));
-      setResult(response.data);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Erro ao processar arquivo.');
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Erro ao processar arquivo.';
+      setError(errorMessage);
       console.error(err);
     } finally {
-      clearInterval(progressInterval);
       setIsLoading(false);
       setProgress(0);
     }
   }, [file, mapping, prescription, immunity, exemption, incomplete]);
 
   const handleExport = useCallback(async () => {
-    if (!file) return;
+    if (!file || processedDataRef.current.length === 0) return;
 
     setIsExporting(true);
     setError(null);
 
     try {
-      const config: CleansingConfig = {
-        mapping,
-        prescription,
-        immunity,
-        exemption,
-        incomplete,
-      };
-
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('config', JSON.stringify(config));
-
-      const response = await axios.post(`${API_URL}/export`, formData, {
-        responseType: 'blob',
-      });
-
-      // Trigger download
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `higienizado_${file.name}`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (err: any) {
+      const filename = `higienizado_${file.name.replace(/\.[^/.]+$/, '')}.xlsx`;
+      exportToExcel(processedDataRef.current, filename);
+    } catch (err: unknown) {
       setError('Erro ao exportar arquivo.');
       console.error(err);
     } finally {
       setIsExporting(false);
     }
-  }, [file, mapping, prescription, immunity, exemption, incomplete]);
+  }, [file]);
 
   const isMappingValid = mapping.debt_id && mapping.taxpayer_name && mapping.due_date && mapping.amount;
 
@@ -203,7 +194,7 @@ function App() {
             onFileSelect={handleFileSelect}
             selectedFile={file}
             onClear={handleClearFile}
-            isLoading={isLoading}
+            isLoading={isLoading && columns.length === 0}
           />
         </section>
 
