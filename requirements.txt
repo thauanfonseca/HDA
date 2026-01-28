@@ -1,8 +1,0 @@
-fastapi
-uvicorn
-polars
-openpyxl
-python-multipart
-xlrd
-pydantic
-xlsx2csv
