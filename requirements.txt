@@ -1,7 +1,8 @@
 fastapi
 uvicorn
-pandas
+polars
 openpyxl
 python-multipart
 xlrd
 pydantic
+xlsx2csv

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 import json
 import io
-import pandas as pd
+import polars as pl
 from starlette.responses import StreamingResponse
 
 from cleaner import process_file
@@ -25,13 +25,17 @@ async def analyze_headers(file: UploadFile = File(...)):
     try:
         content = await file.read()
         if file.filename.endswith(".xlsx"):
-            df = pd.read_excel(io.BytesIO(content), nrows=0, engine='openpyxl')
+            df = pl.read_excel(io.BytesIO(content))
         elif file.filename.endswith(".xls"):
-            df = pd.read_excel(io.BytesIO(content), nrows=0, engine='xlrd')
+            import xlrd
+            workbook = xlrd.open_workbook(file_contents=content)
+            sheet = workbook.sheet_by_index(0)
+            headers = [str(cell.value) for cell in sheet.row(0)]
+            return {"columns": headers}
         else:
             raise HTTPException(status_code=400, detail="Unsupported file format")
             
-        return {"columns": df.columns.tolist()}
+        return {"columns": df.columns}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
 
@@ -52,21 +56,12 @@ async def process_debt_file(
     try:
         processed_df, summary = process_file(content, file.filename, clean_config)
         
-        # Save processed DF to a temporary memory buffer to return (or just return summary and wait for download request?)
-        # For simplicity in this turn, I'll return the summary and a 'preview' of the first 100 rows.
-        # User can request full download in a separate endpoint or we stream it here?
-        # Usually better to separate, but for an MVP, returning JSON preview is good for the UI grid.
-        
         # Convert preview to dict
-        preview = processed_df.head(100).fillna('').to_dict(orient='records')
+        preview = processed_df.head(100).to_dicts()
         
         return {
             "summary": summary,
             "preview": preview,
-            # In a real app we might cache the result ID and allow download. 
-            # For now, we will handle the download by re-processing (simple stateless) or client-side export if data is small. 
-            # Given size (25MB+), client-side export might crash. 
-            # Let's add a download endpoint that streams the result.
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
@@ -77,8 +72,6 @@ async def export_debt_file(
     config: str = Form(...)
 ):
     """Re-processes and returns the full Excel file."""
-    # Note: Optimization would be to cache the processed dataframe from the previous step.
-    # But for simplicity/statelessness, we re-process here.
     try:
         config_dict = json.loads(config)
         clean_config = CleansingConfig(**config_dict)
@@ -86,8 +79,7 @@ async def export_debt_file(
         processed_df, _ = process_file(content, file.filename, clean_config)
         
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            processed_df.to_excel(writer, index=False)
+        processed_df.write_excel(output)
         output.seek(0)
         
         return StreamingResponse(

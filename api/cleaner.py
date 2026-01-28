@@ -1,16 +1,27 @@
-import pandas as pd
+import polars as pl
 from datetime import datetime
 from models import CleansingConfig
 import io
 import re
 
-def process_file(file_content: bytes, filename: str, config: CleansingConfig) -> (pd.DataFrame, dict):
+def process_file(file_content: bytes, filename: str, config: CleansingConfig) -> (pl.DataFrame, dict):
     # Load Data
     try:
         if filename.endswith(".xlsx"):
-            df = pd.read_excel(io.BytesIO(file_content), engine='openpyxl')
+            df = pl.read_excel(io.BytesIO(file_content))
         elif filename.endswith(".xls"):
-            df = pd.read_excel(io.BytesIO(file_content), engine='xlrd')
+            # Polars doesn't support .xls directly, use xlsx2csv workaround
+            import xlrd
+            workbook = xlrd.open_workbook(file_contents=file_content)
+            sheet = workbook.sheet_by_index(0)
+            data = []
+            headers = [str(cell.value) for cell in sheet.row(0)]
+            for row_idx in range(1, sheet.nrows):
+                row_data = {}
+                for col_idx, header in enumerate(headers):
+                    row_data[header] = sheet.cell_value(row_idx, col_idx)
+                data.append(row_data)
+            df = pl.DataFrame(data)
         else:
             raise ValueError("Unsupported file format. Use .xlsx or .xls")
     except Exception as e:
@@ -26,46 +37,65 @@ def process_file(file_content: bytes, filename: str, config: CleansingConfig) ->
         raise ValueError(f"Missing columns in file: {', '.join(missing)}")
 
     # Helper function to parse dates
-    def parse_date(x):
+    def parse_date(val):
+        if val is None:
+            return None
         try:
-            return pd.to_datetime(x, dayfirst=True, errors='coerce')
+            if isinstance(val, datetime):
+                return val
+            if isinstance(val, str):
+                # Try common formats
+                for fmt in ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"]:
+                    try:
+                        return datetime.strptime(val, fmt)
+                    except:
+                        continue
+            return None
         except:
-            return pd.NaT
+            return None
 
     # Helper for Amount
-    def parse_amount(x):
+    def parse_amount(val):
+        if val is None:
+            return 0.0
         try:
-            if isinstance(x, str):
-                x = x.replace('R$', '').replace(' ', '')
+            if isinstance(val, (int, float)):
+                return float(val)
+            if isinstance(val, str):
+                x = val.replace('R$', '').replace(' ', '')
                 if ',' in x and '.' in x:
-                     x = x.replace('.', '').replace(',', '.')
+                    x = x.replace('.', '').replace(',', '.')
                 elif ',' in x:
                     x = x.replace(',', '.')
-            return float(x)
+                return float(x)
+            return 0.0
         except:
             return 0.0
 
-    # Create standardized working columns
-    df['_temp_date'] = df[mapping.due_date].apply(parse_date)
-    df['_temp_amount'] = df[mapping.amount].apply(parse_amount)
-    df['_temp_name'] = df[mapping.taxpayer_name].fillna('').astype(str).str.upper()
+    # Process with Polars - convert to Python for complex logic
+    data = df.to_dicts()
     
-    if mapping.cpf_cnpj and mapping.cpf_cnpj in df.columns:
-        df['_temp_doc'] = df[mapping.cpf_cnpj].fillna('').astype(str).str.replace(r'[^0-9]', '', regex=True)
-    else:
-        df['_temp_doc'] = ''
-
-    if mapping.tribute_type and mapping.tribute_type in df.columns:
-        df['_temp_tribute'] = df[mapping.tribute_type].fillna('').astype(str).str.upper()
-    else:
-        df['_temp_tribute'] = ''
-
-    # Initialize Status
-    df['Status_Higienizacao'] = 'Válido'
-    df['Motivo_Higienizacao'] = ''
+    for row in data:
+        row['_temp_date'] = parse_date(row.get(mapping.due_date))
+        row['_temp_amount'] = parse_amount(row.get(mapping.amount))
+        row['_temp_name'] = str(row.get(mapping.taxpayer_name) or '').upper()
+        
+        if mapping.cpf_cnpj and mapping.cpf_cnpj in df.columns:
+            doc = str(row.get(mapping.cpf_cnpj) or '')
+            row['_temp_doc'] = re.sub(r'[^0-9]', '', doc)
+        else:
+            row['_temp_doc'] = ''
+            
+        if mapping.tribute_type and mapping.tribute_type in df.columns:
+            row['_temp_tribute'] = str(row.get(mapping.tribute_type) or '').upper()
+        else:
+            row['_temp_tribute'] = ''
+        
+        row['Status_Higienizacao'] = 'Válido'
+        row['Motivo_Higienizacao'] = ''
 
     # --- RULES PROCESSING ---
-
+    
     # 1. Prescription
     if config.prescription.enabled:
         ref_date = datetime.now()
@@ -76,68 +106,92 @@ def process_file(file_content: bytes, filename: str, config: CleansingConfig) ->
                 pass
         
         cutoff_date = ref_date.replace(year=ref_date.year - config.prescription.years)
-        mask_prescribed = (df['_temp_date'] < cutoff_date) & (df['_temp_date'].notnull())
         
-        df.loc[mask_prescribed, 'Status_Higienizacao'] = 'Prescrito'
-        df.loc[mask_prescribed, 'Motivo_Higienizacao'] = f'Vencimento anterior a {cutoff_date.strftime("%d/%m/%Y")}'
+        for row in data:
+            if row['Status_Higienizacao'] == 'Válido':
+                temp_date = row['_temp_date']
+                if temp_date and temp_date < cutoff_date:
+                    row['Status_Higienizacao'] = 'Prescrito'
+                    row['Motivo_Higienizacao'] = f'Vencimento anterior a {cutoff_date.strftime("%d/%m/%Y")}'
 
     # 2. Immunity
     if config.immunity.enabled:
-        mask_valid = df['Status_Higienizacao'] == 'Válido'
         keywords = [k.upper() for k in config.immunity.keywords]
-        pattern = '|'.join(map(re.escape, keywords))
+        pattern = re.compile('|'.join(map(re.escape, keywords)))
         
-        mask_immune_name = df.loc[mask_valid, '_temp_name'].str.contains(pattern, regex=True)
-        ids_immune = df.loc[mask_valid][mask_immune_name].index
-        df.loc[ids_immune, 'Status_Higienizacao'] = 'Imune'
-        df.loc[ids_immune, 'Motivo_Higienizacao'] = 'Entidade Imune identificada por palavra-chave'
+        for row in data:
+            if row['Status_Higienizacao'] == 'Válido':
+                if pattern.search(row['_temp_name']):
+                    row['Status_Higienizacao'] = 'Imune'
+                    row['Motivo_Higienizacao'] = 'Entidade Imune identificada por palavra-chave'
 
     # 3. Exemption
     if config.exemption.enabled:
-        mask_valid = df['Status_Higienizacao'] == 'Válido'
-        
         if config.exemption.amount_threshold > 0:
-            mask_low_value = df.loc[mask_valid, '_temp_amount'] < config.exemption.amount_threshold
-            ids_low = df.loc[mask_valid][mask_low_value].index
-            df.loc[ids_low, 'Status_Higienizacao'] = 'Isento'
-            df.loc[ids_low, 'Motivo_Higienizacao'] = f'Valor abaixo de R$ {config.exemption.amount_threshold}'
-
-        mask_valid = df['Status_Higienizacao'] == 'Válido'
+            for row in data:
+                if row['Status_Higienizacao'] == 'Válido':
+                    if row['_temp_amount'] < config.exemption.amount_threshold:
+                        row['Status_Higienizacao'] = 'Isento'
+                        row['Motivo_Higienizacao'] = f'Valor abaixo de R$ {config.exemption.amount_threshold}'
+        
         if config.exemption.tributes:
             tributes = [t.upper() for t in config.exemption.tributes]
-            mask_tribute = df.loc[mask_valid, '_temp_tribute'].isin(tributes)
-            ids_tribute = df.loc[mask_valid][mask_tribute].index
-            df.loc[ids_tribute, 'Status_Higienizacao'] = 'Isento'
-            df.loc[ids_tribute, 'Motivo_Higienizacao'] = 'Tributo Isento'
+            for row in data:
+                if row['Status_Higienizacao'] == 'Válido':
+                    if row['_temp_tribute'] in tributes:
+                        row['Status_Higienizacao'] = 'Isento'
+                        row['Motivo_Higienizacao'] = 'Tributo Isento'
 
     # 4. Incomplete
     if config.incomplete.enabled:
-        mask_valid = df['Status_Higienizacao'] == 'Válido'
         keywords = [k.upper() for k in config.incomplete.keywords]
-        pattern = '|'.join(map(re.escape, keywords))
+        pattern = re.compile('|'.join(map(re.escape, keywords)))
         
-        mask_bad_name = df.loc[mask_valid, '_temp_name'].str.contains(pattern, regex=True) | (df.loc[mask_valid, '_temp_name'].str.len() < 3)
-        mask_bad_doc = pd.Series(False, index=df.index)
-        if config.incomplete.check_cpf_cnpj:
-             mask_bad_doc = df.loc[mask_valid, '_temp_doc'] == ''
-        
-        ids_incomplete = df.loc[mask_valid][mask_bad_name | mask_bad_doc].index
-        df.loc[ids_incomplete, 'Status_Higienizacao'] = 'Dados Incompletos'
-        df.loc[ids_incomplete, 'Motivo_Higienizacao'] = 'Nome ou CPF/CNPJ inválido/genérico'
+        for row in data:
+            if row['Status_Higienizacao'] == 'Válido':
+                bad_name = pattern.search(row['_temp_name']) or len(row['_temp_name']) < 3
+                bad_doc = config.incomplete.check_cpf_cnpj and row['_temp_doc'] == ''
+                
+                if bad_name or bad_doc:
+                    row['Status_Higienizacao'] = 'Dados Incompletos'
+                    row['Motivo_Higienizacao'] = 'Nome ou CPF/CNPJ inválido/genérico'
 
-    # Clean up
-    df.drop(columns=['_temp_date', '_temp_amount', '_temp_name', '_temp_doc', '_temp_tribute'], inplace=True, errors='ignore')
+    # Clean up temp columns
+    for row in data:
+        del row['_temp_date']
+        del row['_temp_amount']
+        del row['_temp_name']
+        del row['_temp_doc']
+        del row['_temp_tribute']
+
+    # Convert back to Polars DataFrame
+    result_df = pl.DataFrame(data)
+
+    # Calculate summary
+    status_counts = {}
+    total_removed = 0.0
+    total_valid = 0.0
+    
+    for row in data:
+        status = row['Status_Higienizacao']
+        status_counts[status] = status_counts.get(status, 0) + 1
+        
+        amount = parse_amount(row.get(mapping.amount))
+        if status != 'Válido':
+            total_removed += amount
+        else:
+            total_valid += amount
 
     summary = {
-        "total_records": len(df),
-        "processed_records": len(df), 
-        "prescribed_count": int((df['Status_Higienizacao'] == 'Prescrito').sum()),
-        "immune_count": int((df['Status_Higienizacao'] == 'Imune').sum()),
-        "exempt_count": int((df['Status_Higienizacao'] == 'Isento').sum()),
-        "incomplete_count": int((df['Status_Higienizacao'] == 'Dados Incompletos').sum()),
-        "valid_count": int((df['Status_Higienizacao'] == 'Válido').sum()),
-        "total_amount_removed": float(df.loc[df['Status_Higienizacao'] != 'Válido', mapping.amount].apply(parse_amount).sum()),
-        "total_amount_valid": float(df.loc[df['Status_Higienizacao'] == 'Válido', mapping.amount].apply(parse_amount).sum())
+        "total_records": len(data),
+        "processed_records": len(data), 
+        "prescribed_count": status_counts.get('Prescrito', 0),
+        "immune_count": status_counts.get('Imune', 0),
+        "exempt_count": status_counts.get('Isento', 0),
+        "incomplete_count": status_counts.get('Dados Incompletos', 0),
+        "valid_count": status_counts.get('Válido', 0),
+        "total_amount_removed": total_removed,
+        "total_amount_valid": total_valid
     }
 
-    return df, summary
+    return result_df, summary
