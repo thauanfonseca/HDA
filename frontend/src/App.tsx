@@ -15,6 +15,8 @@ const DEFAULT_MAPPING: ColumnMapping = {
   taxpayer_name: '',
   due_date: '',
   amount: '',
+  cpf_cnpj: '',
+  tribute_type: '',
 };
 
 const DEFAULT_PRESCRIPTION: PrescriptionRules = {

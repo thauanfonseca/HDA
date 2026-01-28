@@ -172,7 +172,9 @@ export function processData(
             const keywords = config.incomplete.keywords.map(k => k.toUpperCase());
             const hasBadKeyword = keywords.some(keyword => tempName.includes(keyword));
             const isBadName = hasBadKeyword || tempName.length < 3;
-            const isBadDoc = config.incomplete.check_cpf_cnpj && tempDoc === '';
+
+            // Only check CPF/CNPJ if column is mapped AND rule is enabled
+            const isBadDoc = config.incomplete.check_cpf_cnpj && mapping.cpf_cnpj && tempDoc === '';
 
             if (isBadName || isBadDoc) {
                 status = 'Dados Incompletos';
@@ -209,7 +211,12 @@ export function processData(
 
     for (const row of processedData) {
         const status = row.Status_Higienizacao as keyof typeof statusCounts;
-        statusCounts[status] = (statusCounts[status] || 0) + 1;
+        // Cast to unknown first to avoid TS error
+        const validStatus = status as keyof typeof statusCounts;
+
+        if (statusCounts.hasOwnProperty(validStatus)) {
+            statusCounts[validStatus] = (statusCounts[validStatus] || 0) + 1;
+        }
 
         const amount = parseAmount(row[mapping.amount]);
         if (status !== 'Válido') {
@@ -240,10 +247,25 @@ export function processData(
     };
 }
 
-// Export processed data to Excel
+// Export processed data to Excel with multiple sheets
 export function exportToExcel(data: Record<string, unknown>[], filename: string): void {
-    const worksheet = XLSX.utils.json_to_sheet(data);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Higienizado');
+
+    // 1. Sheet "Higienizados" (Válidos apenas)
+    const validData = data.filter(r => r.Status_Higienizacao === 'Válido');
+    const validSheet = XLSX.utils.json_to_sheet(validData);
+    XLSX.utils.book_append_sheet(workbook, validSheet, 'Higienizados (Válidos)');
+
+    // 2. Sheet "Removidos" (Tudo que não é válido)
+    const invalidData = data.filter(r => r.Status_Higienizacao !== 'Válido');
+    if (invalidData.length > 0) {
+        const invalidSheet = XLSX.utils.json_to_sheet(invalidData);
+        XLSX.utils.book_append_sheet(workbook, invalidSheet, 'Removidos');
+    }
+
+    // 3. Sheet "Original Completo" (Todos os dados + Status)
+    const fullSheet = XLSX.utils.json_to_sheet(data);
+    XLSX.utils.book_append_sheet(workbook, fullSheet, 'Relatório Completo');
+
     XLSX.writeFile(workbook, filename);
 }
