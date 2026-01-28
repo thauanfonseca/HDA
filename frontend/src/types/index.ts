@@ -5,6 +5,7 @@ export interface ColumnMapping {
     due_date: string;
     amount: string;
     tribute_type?: string;
+    tax_year?: string;
 }
 
 export interface PrescriptionRules {

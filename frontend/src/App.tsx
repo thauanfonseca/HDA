@@ -17,6 +17,7 @@ const DEFAULT_MAPPING: ColumnMapping = {
   amount: '',
   cpf_cnpj: '',
   tribute_type: '',
+  tax_year: '',
 };
 
 const DEFAULT_PRESCRIPTION: PrescriptionRules = {

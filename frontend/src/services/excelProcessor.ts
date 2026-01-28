@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import type { CleansingConfig, CleansingResult } from '../types';
+import type { CleansingConfig, CleansingResult, ColumnMapping } from '../types';
 
 export interface ProcessResult {
     summary: CleansingResult;
@@ -211,11 +211,9 @@ export function processData(
 
     for (const row of processedData) {
         const status = row.Status_Higienizacao as keyof typeof statusCounts;
-        // Cast to unknown first to avoid TS error
-        const validStatus = status as keyof typeof statusCounts;
-
-        if (statusCounts.hasOwnProperty(validStatus)) {
-            statusCounts[validStatus] = (statusCounts[validStatus] || 0) + 1;
+        // Safe check for status key
+        if (Object.prototype.hasOwnProperty.call(statusCounts, status)) {
+            statusCounts[status] = (statusCounts[status] || 0) + 1;
         }
 
         const amount = parseAmount(row[mapping.amount]);
@@ -247,25 +245,99 @@ export function processData(
     };
 }
 
+// Helper to format currency
+const formatCurrency = (val: number) => {
+    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+};
+
 // Export processed data to Excel with multiple sheets
-export function exportToExcel(data: Record<string, unknown>[], filename: string): void {
+export function exportToExcel(data: Record<string, unknown>[], filename: string, mapping: ColumnMapping): void {
     const workbook = XLSX.utils.book_new();
 
-    // 1. Sheet "Higienizados" (Válidos apenas)
+    // 1. Dívida Ativa (Todos os dados originais + colunas de status)
+    // User requested "Dívida Ativa" as the raw input essentially, but since we are tagging it, keeping the tags is useful.
+    // Actually, the user showed "Dívida Ativa" tab and "Dívida Ativa após higienização".
+    // "Dívida Ativa" tab likely contains everything.
+    const fullSheet = XLSX.utils.json_to_sheet(data);
+    XLSX.utils.book_append_sheet(workbook, fullSheet, 'Dívida Ativa');
+
+    // 2. Imunes e Isentos
+    const immuneData = data.filter(r => r.Status_Higienizacao === 'Imune' || r.Status_Higienizacao === 'Isento');
+    const immuneSheet = XLSX.utils.json_to_sheet(immuneData);
+    XLSX.utils.book_append_sheet(workbook, immuneSheet, 'Imunes e Isentos');
+
+    // 3. Prescritos
+    const prescribedData = data.filter(r => r.Status_Higienizacao === 'Prescrito');
+    const prescribedSheet = XLSX.utils.json_to_sheet(prescribedData);
+    XLSX.utils.book_append_sheet(workbook, prescribedSheet, 'Prescritos');
+
+    // 4. Ignorados (Dados Incompletos)
+    const incompleteData = data.filter(r => r.Status_Higienizacao === 'Dados Incompletos');
+    const incompleteSheet = XLSX.utils.json_to_sheet(incompleteData);
+    XLSX.utils.book_append_sheet(workbook, incompleteSheet, 'Ignorados');
+
+    // 5. Dívida Ativa após higienização (Válidos)
     const validData = data.filter(r => r.Status_Higienizacao === 'Válido');
     const validSheet = XLSX.utils.json_to_sheet(validData);
-    XLSX.utils.book_append_sheet(workbook, validSheet, 'Higienizados (Válidos)');
+    XLSX.utils.book_append_sheet(workbook, validSheet, 'Dívida Ativa após higienização');
 
-    // 2. Sheet "Removidos" (Tudo que não é válido)
-    const invalidData = data.filter(r => r.Status_Higienizacao !== 'Válido');
-    if (invalidData.length > 0) {
-        const invalidSheet = XLSX.utils.json_to_sheet(invalidData);
-        XLSX.utils.book_append_sheet(workbook, invalidSheet, 'Removidos');
-    }
+    // 6. Resumo
+    // Build the summary table
+    const summaryRows: any[] = [];
 
-    // 3. Sheet "Original Completo" (Todos os dados + Status)
-    const fullSheet = XLSX.utils.json_to_sheet(data);
-    XLSX.utils.book_append_sheet(workbook, fullSheet, 'Relatório Completo');
+    // Calculate total before cleansing
+    const totalAmount = data.reduce((acc, row) => acc + parseAmount(row[mapping.amount]), 0);
+
+    // Header Row for Total
+    summaryRows.push({
+        'Resumo': 'Total antes de higienização',
+        'Valor': formatCurrency(totalAmount)
+    });
+    summaryRows.push({}); // Empty row
+
+    // Group by Year
+    const yearStats: Record<string, { valid: number, immune: number, incomplete: number, prescribed: number }> = {};
+
+    data.forEach(row => {
+        let year = 'N/A';
+        if (mapping.tax_year && row[mapping.tax_year]) {
+            year = String(row[mapping.tax_year]);
+        } else if (mapping.due_date) {
+            const date = parseDate(row[mapping.due_date]);
+            if (date) {
+                year = date.getFullYear().toString();
+            }
+        }
+
+        if (!yearStats[year]) {
+            yearStats[year] = { valid: 0, immune: 0, incomplete: 0, prescribed: 0 };
+        }
+
+        const amount = parseAmount(row[mapping.amount]);
+        const status = row.Status_Higienizacao;
+
+        if (status === 'Válido') yearStats[year].valid += amount;
+        else if (status === 'Imune' || status === 'Isento') yearStats[year].immune += amount;
+        else if (status === 'Dados Incompletos') yearStats[year].incomplete += amount;
+        else if (status === 'Prescrito') yearStats[year].prescribed += amount;
+    });
+
+    // Create table rows
+    const sortedYears = Object.keys(yearStats).sort();
+
+    // Table Headers (simulated in data)
+    const tableData = sortedYears.map(year => ({
+        'Ano': year,
+        'Dívida Ativa': formatCurrency(yearStats[year].valid),
+        'Imunes': formatCurrency(yearStats[year].immune),
+        'Ignorados': formatCurrency(yearStats[year].incomplete),
+        'Prescritos': formatCurrency(yearStats[year].prescribed)
+    }));
+
+    const summarySheet = XLSX.utils.json_to_sheet(summaryRows, { skipHeader: true });
+    XLSX.utils.sheet_add_json(summarySheet, tableData, { origin: 'A4' }); // Start table at A4
+
+    XLSX.utils.book_append_sheet(workbook, summarySheet, 'Resumo');
 
     XLSX.writeFile(workbook, filename);
 }
