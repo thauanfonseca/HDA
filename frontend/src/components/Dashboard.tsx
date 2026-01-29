@@ -1,11 +1,30 @@
-import type { CleansingResult } from '../types';
-import { FileCheck, AlertTriangle, Shield, Ban, XCircle, CheckCircle2 } from 'lucide-react';
+import { useState } from 'react';
+import type { CleansingResult, ColumnMapping } from '../types';
+import { FileCheck, AlertTriangle, Shield, Ban, XCircle, CheckCircle2, FileText, Loader2 } from 'lucide-react';
+import { generatePDFReport } from '../services/reportGenerator';
 
 interface DashboardProps {
     result: CleansingResult;
+    mapping: ColumnMapping;
+    fileName?: string;
 }
 
-export function Dashboard({ result }: DashboardProps) {
+export function Dashboard({ result, mapping, fileName }: DashboardProps) {
+    const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+
+    const handleGenerateReport = async () => {
+        setIsGeneratingReport(true);
+        try {
+            // Small delay to show loading state
+            await new Promise(resolve => setTimeout(resolve, 500));
+            generatePDFReport({ result, mapping, fileName });
+        } catch (error) {
+            console.error('Error generating report:', error);
+        } finally {
+            setIsGeneratingReport(false);
+        }
+    };
+
     const formatCurrency = (value: number) => {
         return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
     };
@@ -64,10 +83,30 @@ export function Dashboard({ result }: DashboardProps) {
     return (
         <div className="space-y-6">
             <div className="card glow-purple">
-                <h3 className="text-lg font-semibold text-white mb-6 flex items-center gap-2">
-                    <span className="w-2 h-2 bg-primary-500 rounded-full animate-pulse"></span>
-                    Resultado da Higienização
-                </h3>
+                <div className="flex justify-between items-start mb-6">
+                    <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                        <span className="w-2 h-2 bg-primary-500 rounded-full animate-pulse"></span>
+                        Resultado da Higienização
+                    </h3>
+                    <button
+                        onClick={handleGenerateReport}
+                        disabled={isGeneratingReport}
+                        className="btn-secondary text-sm py-2 px-3 flex items-center gap-2"
+                        title="Baixar Relatório em PDF"
+                    >
+                        {isGeneratingReport ? (
+                            <>
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                Gerando...
+                            </>
+                        ) : (
+                            <>
+                                <FileText className="w-4 h-4" />
+                                Relatório PDF
+                            </>
+                        )}
+                    </button>
+                </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                     {stats.map((stat) => (

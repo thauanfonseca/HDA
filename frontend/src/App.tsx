@@ -266,7 +266,11 @@ function App() {
         {/* Results */}
         {result && (
           <>
-            <Dashboard result={result.summary} />
+            <Dashboard
+              result={result.summary}
+              mapping={mapping}
+              fileName={file?.name}
+            />
 
             <PreviewTable data={result.preview} />
 
