@@ -13,7 +13,13 @@ function parseDate(value: unknown): Date | null {
 
     if (value instanceof Date) return value;
 
+    // Handle 4-digit year as number (e.g., 2019)
     if (typeof value === 'number') {
+        if (value >= 1900 && value <= 2100) {
+            // Assume it's a year, return Jan 1st
+            return new Date(value, 0, 1);
+        }
+
         // Excel serial date
         const date = XLSX.SSF.parse_date_code(value);
         if (date) {
@@ -22,6 +28,16 @@ function parseDate(value: unknown): Date | null {
     }
 
     if (typeof value === 'string') {
+        const cleaned = value.trim();
+
+        // Handle 4-digit year as string (e.g., "2019")
+        if (/^\d{4}$/.test(cleaned)) {
+            const year = parseInt(cleaned);
+            if (year >= 1900 && year <= 2100) {
+                return new Date(year, 0, 1);
+            }
+        }
+
         // Try common formats
         const formats = [
             /^(\d{2})\/(\d{2})\/(\d{4})$/, // DD/MM/YYYY
@@ -30,7 +46,7 @@ function parseDate(value: unknown): Date | null {
         ];
 
         for (const format of formats) {
-            const match = value.match(format);
+            const match = cleaned.match(format);
             if (match) {
                 if (format === formats[0] || format === formats[2]) {
                     return new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
