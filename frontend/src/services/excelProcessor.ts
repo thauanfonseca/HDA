@@ -185,8 +185,15 @@ export function processData(
 
         // 4. Incomplete check
         if (config.incomplete.enabled && status === 'Válido') {
-            const keywords = config.incomplete.keywords.map(k => k.toUpperCase());
-            const hasBadKeyword = keywords.some(keyword => tempName.includes(keyword));
+            const keywords = config.incomplete.keywords;
+            const hasBadKeyword = keywords.some(keyword => {
+                // Escape special regex characters to avoid issues
+                const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                // Create regex with word boundaries, case insensitive
+                const regex = new RegExp(`\\b${escapedKeyword}\\b`, 'i');
+                return regex.test(tempName);
+            });
+
             const isBadName = hasBadKeyword || tempName.length < 3;
 
             // Only check CPF/CNPJ if column is mapped AND rule is enabled
