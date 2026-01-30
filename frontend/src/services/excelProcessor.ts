@@ -144,16 +144,22 @@ export function processData(
         let motivo = '';
 
         // 1. Prescription check
-        if (config.prescription.enabled && status === 'Válido') {
+        if (config.prescription.enabled && status === 'Válido' && tempDate) {
             const refDate = config.prescription.reference_date
                 ? new Date(config.prescription.reference_date)
                 : new Date();
-            const cutoffDate = new Date(refDate);
-            cutoffDate.setFullYear(cutoffDate.getFullYear() - config.prescription.years);
 
-            if (tempDate && tempDate < cutoffDate) {
+            const currentYear = refDate.getFullYear();
+            const debtYear = tempDate.getFullYear();
+            const cutoffYear = currentYear - config.prescription.years;
+
+            // Simple year comparison as requested
+            // Example: Current 2026. Cutoff = 2026 - 5 = 2021.
+            // Debt 2020 (< 2021) -> Prescribed
+            // Debt 2021 (>= 2021) -> Valid
+            if (debtYear < cutoffYear) {
                 status = 'Prescrito';
-                motivo = `Vencimento anterior a ${cutoffDate.toLocaleDateString('pt-BR')}`;
+                motivo = `Exercício ${debtYear} anterior a ${cutoffYear} (limite de ${config.prescription.years} anos)`;
             }
         }
 
